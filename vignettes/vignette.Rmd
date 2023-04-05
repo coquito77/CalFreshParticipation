@@ -1,0 +1,642 @@
+---
+title: "vignette"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{vignette}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup, eval=FALSE}
+
+# library(CalFreshParticipation)
+
+# https://machinelearningmastery.com/non-linear-classification-in-r-with-decision-trees/
+# http://uc-r.github.io/gbm_regression#gbm
+# https://www.r-bloggers.com/2018/05/chaid-and-r-when-you-need-explanation-may-15-2018/
+devtools::load_all(".")
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ggplot2)
+library(poissonreg)
+
+rm(list = ls()) ;gc()
+
+if(TRUE) {
+  
+  data("countyDat")
+  data("variables")
+  
+  wideDat <- wideData(countyDat)
+  
+if(FALSE) {
+  
+  set.seed(55)
+  
+  # B22010_001 HH, B01001_001 PP
+  
+  summarizedData <- wideDat %>%
+    select(GEOID, county:age65Plus) %>%
+    left_join( countyDat %>%
+                 filter(grepl("B22010_001|B01001_001", variable)) %>% 
+                 select(GEOID ,variable, estimate) %>% 
+                 pivot_wider(names_from = variable, values_from = estimate ) ) %>%
+    select(-GEOID) %>% 
+    group_by(county) %>% 
+    summarise(across(where(is.numeric), ~ sum(.x, na.rm = TRUE))) %>% 
+    ungroup
+  
+  na_count <- sapply(summarizedData, function(y) sum(length(which(is.na(y)))))
+  
+  data.frame(na_count) %>% 
+    filter(na_count != 0) %>% 
+    rownames_to_column(var = "name") %>% 
+    left_join(variables %>% select(name:concept)) %>% 
+    .$name %>% 
+    lapply(., function(x){grep(x, names(summarizedData)) }) %>% 
+    unlist %>% 
+    setdiff(c(2:ncol(summarizedData)), . ) -> colsNotNA
+  
+  mydata <- scale(summarizedData[, colsNotNA])
+  
+  wss <- (nrow(mydata)-1)*sum(apply(mydata,2,var), na.rm = TRUE)
+  
+  for (i in 2:15) wss[i] <- sum(kmeans(mydata,
+                                       centers=i)$withinss, na.rm = TRUE)
+  
+  plot(1:15, wss, type="b", xlab="Number of Clusters",
+       ylab="Within groups sum of squares")
+  
+  clusterDat <- kmeans(mydata, 4, nstart = 20)
+  clusterDat
+  
+  summarizedData$cluster <- as.factor(clusterDat$cluster)
+  
+  summarizedData %>% 
+    select(county,
+           cluster, age65Plus, B01001_001, B19001_002) -> tmp
+  
+  hull <- tmp %>%
+    group_by( cluster) %>% 
+    slice(chull( B01001_001, B19001_002))
+  
+  ifelse(!dir.exists("./plots")
+         , dir.create("./plots")
+         , FALSE)
+  
+  # Define the scatterplot
+  
+  ggplot(data = tmp, aes(B01001_001, B19001_002)) + 
+    geom_point()
+  
+  
+  tmp %>%
+    ggplot() +
+    geom_point(aes(B01001_001, B19001_002, color = cluster), alpha = .2) +
+    # geom_density_2d( aes(age65Plus, B22003_001, color = cluster, group = county), alpha = 0.5) +
+    labs (x = "B22010001 Universe: Households", y = "B01001_001 Total Population") +
+    geom_text(data = tmp %>%
+                filter(grepl(
+                  "Los Angeles|Riverside|San Bernardino|Ventura|San Diego|Orange|Kern|Francisco|Santa Clara|Alameda|Sacrameto", county)) %>% 
+                mutate(county = sub(", California","", county)),
+              aes(B01001_001, B19001_002, color = cluster, label = county),
+              alpha = .8, size =3) + 
+    scale_x_continuous(labels = scales::comma, trans ="log10") +
+  facet_wrap(~cluster)
+  
+  countyDat %>% 
+    filter(grepl("B01001_001|B22001_002", variable)) %>%
+    #sample_n(500) %>% 
+    select( NAME, variable, estimate) %>% 
+    mutate(County = sub("^([^,]+),\\s*([^,]+),.*", "\\2", NAME)) %>% 
+    group_by(County, variable) %>%
+    summarise(across(where(is.numeric), ~ sum(.x, na.rm = TRUE))) %>% 
+    ungroup() %>% 
+    group_by(County) %>% 
+    pivot_wider(names_from = variable, values_from = estimate) %>% 
+    ungroup %>% 
+    mutate(hss_ovr_hhpop = B22001_002/B01001_001) -> tmp
+  
+  tmp %>%
+    ggplot() +
+    geom_point(aes(B01001_001, B22001_002, color = hss_ovr_hhpop),
+               show.legend = FALSE, alpha = .2) +
+    hrbrthemes::theme_ipsum() +
+    labs (title = "Total Population vs Households receiving SNAP in the last 12 months",
+          subtitle ="Fresno and San Bernardino are the biggest counts with the
+          highest ratio of SNAP HH vs Total Population",
+          y = "B22001_002 Estimate Total Household received Food Stamps/SNAP in the past 12 months", x = "B01001_001 Estimate Total Population",
+          caption = "Source: U.S. Census ACS 5-year 2020") + 
+    scale_x_continuous(labels = scales::comma, trans ="log10") +
+    scale_y_continuous(labels = scales::comma, trans ="log10") +
+    ggrepel::geom_text_repel(data = tmp %>%
+                               filter(grepl(
+                                 "Los Angeles|Fresno|Riverside|San Bernardino|Ventura|San Diego|Orange|Kern|Francisco|Santa Clara|Alameda|Sacrameto",  County)),
+                             aes(B01001_001, B22001_002, label = County, color = hss_ovr_hhpop),
+                             alpha = .8, size =3, show.legend = FALSE) -> gplot
+  
+  
+  gplot
+  
+  ggsave("plots/county_Vs_snapHH.png",width = 20, height = 20, units = "cm")
+
+}
+  
+  set.seed(42)
+  
+  wideDat <- wideDat %>%
+    data.table %>%
+    .[, hhSNAP_Grps := cut(hhSNAP,
+                           dig.lab = 10,
+                           include.lowest = TRUE,
+                           ,breaks = BAMMtools::getJenksBreaks(.$hhSNAP,
+                                                               6, subset = NULL))]
+  
+  (fmla <- as.formula(paste("hhSNAP_Grps ~ ", paste( names(wideDat)[c(4:111)]
+                                                     , collapse = "+"))) )
+  
+  (fmlaNum <- as.formula(paste("hhSNAP ~ ", paste( names(wideDat)[c(4:111)]
+                                                   , collapse = "+"))) )
+  
+  library(tidymodels)
+  library(bayestestR)
+  
+  set.seed(55)
+  index <- 1:nrow(wideDat)
+  testindex <- sample(index, trunc(length(index)/3))
+  testset <- wideDat[testindex,]
+  trainset <- wideDat[-testindex,]
+  trainsetSB <- wideDat[grepl("Bernardino",wideDat$county), ]
+  
+  lm_model <-
+    linear_reg() %>%
+    set_engine("lm") %>%
+    fit(fmlaNum, data = trainset)
+  
+  sb_lm_model <-
+    linear_reg() %>%
+    set_engine("lm") %>%
+    fit(fmlaNum, data = trainsetSB)
+  
+  model_spec_linear <- parsnip::poisson_reg(
+    mode = "regression",
+    engine = "glm")
+  
+  model_spec_randForst <- parsnip::rand_forest(
+    # mtry = integer(1),
+    # trees = integer(1),
+    # min_n = integer(1)
+  ) %>% 
+    set_engine("randomForest") %>% 
+    set_mode("regression") %>%
+    fit(fmlaNum, data = trainset)
+  
+    model_spec_randForstSB <- parsnip::rand_forest(
+    # mtry = integer(1),
+    # trees = integer(1),
+    # min_n = integer(1)
+  ) %>% 
+    set_engine("randomForest") %>% 
+    set_mode("regression") %>%
+    fit(fmlaNum, data = trainsetSB)
+
+  recipe_spec_linear <- recipes::recipe(fmlaNum, trainset)
+  
+    workflow_linear <- workflows::workflow() %>%
+    workflows::add_model (model_spec_linear) %>%
+    workflows::add_recipe( recipe_spec_linear)
+  
+  workflow_linear_fit <- workflow_linear %>%
+    fit(testset)
+  
+  workflow_linear_fit
+  
+  core_brms_model <- workflow_linear_fit %>% 
+    extract_fit_parsnip()  %>% 
+    pluck("fit")
+  
+  core_brms_model
+  
+  # wideDat %>% 
+  #   mutate( predict(lm_model, new_data = wideDat, interval = "predict") %>% 
+  #             as_tibble() %>% dplyr::select(.fit = 1) ,
+  #           predict( lm_model, new_data = wideDat, type = "conf_int", level = 0.90 ) %>% 
+  #             dplyr::select( .lwrfit = 1, .uprfit = 2),
+  #           predict(sb_lm_model, new_data = wideDat, interval = "predict") %>% 
+  #             as_tibble() %>% dplyr::select(.sbfit = 1),#.lwr = 2, .upr = 3),
+  #           predict( sb_lm_model, new_data = wideDat, type = "conf_int", level = 0.90 ) %>% 
+  #             dplyr::select( .sblwrfit = 1, .sbuprfit = 2),
+  #           predict(workflow_linear_fit, new_data = wideDat, interval = "predict") %>% 
+  #             as_tibble() %>% dplyr::select(.fit_glm = 1),
+  #   ) %>% 
+  #   mutate(.combination = (.fit + .fit_glm  ) / 2) %>% 
+  #   select(GEOID,NAME, county, hhSNAP, hhSNAP_Grps, contains(".")) -> predictionsReg
+
+  core_brms_model %>% plot()
+  
+if(!file.exists("models/model_bayesian.rds")) {
+  
+  model_bayes <- stan_glm(fmlaNum, data = trainset, seed = 111)
+  
+  ifelse(!dir.exists("./models")
+         , dir.create("./models")
+         , FALSE)
+  
+  model_bayes %>% readr::write_rds("models/model_bayesian.rds")
+  
+  startTime <- Sys.time()
+  
+  sbmodel_bayes <- stan_glm(fmlaNum, data = trainsetSB, seed = 111)
+  
+  Sys.time() - startTime #Time difference of 8.37695 mins
+  
+  sbmodel_bayes %>% readr::write_rds("models/sbmodel_bayesian.rds")
+  
+} else { model_bayes <- readr::read_rds("models/model_bayesian.rds")
+sbmodel_bayes <- readr::read_rds("models/sbmodel_bayesian.rds")
+}
+  
+if(TRUE) {
+  
+  bayestestR::describe_posterior(model_bayes)
+  bayestestR::describe_posterior(sbmodel_bayes)
+  
+  post <- insight::get_parameters(model_bayes)
+  
+  print(purrr::map_dbl(post,median),digits = 3)
+  
+  print(purrr::map_dbl(post, bayestestR::map_estimate),digits = 3)
+  
+  print(purrr::map_dbl(post, mean),digits = 3)
+
+  purrr::map_dbl(post, bayestestR::map_estimate) %>% sort
+
+library(bayesplot)
+
+mcmc_dens(model_bayes, pars = c("B19001_003")) +
+  vline_at(median(post$B19001_003), col = "red") +
+  vline_at(mean(post$B19001_003), col = "yellow") +
+  vline_at(bayestestR::map_estimate(post$B19001_003), col = "green")
+
+hdi(model_bayes)
+hdi(sbmodel_bayes)
+eti(model_bayes)
+eti(sbmodel_bayes)
+
+rope(post$B19001_003)
+
+rope(post$B25024_007)
+
+rope(post$`(Intercept)`)
+
+rope(post$B01001_004)
+
+df1 <-dplyr::select(tidy(lm_model), c(term,p.value))
+df1$p.value <- round(df1$p.value, digits = 3)
+df2 <- 1- purrr::map_dbl(post, p_direction)
+df <- cbind(df1,df2)
+df
+  
+tidy(lm_model)
+tidy(sb_lm_model)
+tidy(workflow_linear_fit)
+
+describe_posterior(model_bayes)
+describe_posterior(sbmodel_bayes)
+
+predictions_lm_bayes_tbl <- wideDat %>% 
+  dplyr::select(hhSNAP) %>% 
+  mutate( .fit_glm = predict( workflow_linear_fit, new_data = wideDat) %>%
+            pull(.pred),
+          .pred_lm = predict(lm_model, new_data = wideDat, interval = "predict") %>%
+            pull(.pred)
+         ,.sbpred_lm = predict(sb_lm_model, new_data = wideDat, interval = "predict") %>%
+           pull(.pred)
+          )
+
+#predict(sb_lm_model, newdata = tibble(wideDat))
+
+predictions_lm_bayes_tbl %>% yardstick::rmse(truth = hhSNAP, estimate = .fit_glm)
+predictions_lm_bayes_tbl %>% yardstick::rmse(truth = hhSNAP, estimate = .pred_lm)
+predictions_lm_bayes_tbl %>% yardstick::rmse(truth = hhSNAP, estimate = .sbpred_lm)  
+
+library(rstanarm)
+
+wideDat %>% 
+  mutate( .pred_randFrs = predict(model_spec_randForst, 
+                                  new_data = wideDat, interval = "predict") %>% pull(.pred),
+          .sb_pred_randFrs = predict(model_spec_randForstSB, 
+                                     new_data = wideDat, interval = "predict") %>% pull(.pred),
+          .pred_lm = predict(lm_model, new_data = wideDat, interval = "predict") %>% pull(.pred),
+          predict( lm_model, new_data = wideDat, type = "conf_int", level = 0.90 ) %>% 
+            dplyr::select( .lwr_lm_fit = 1, .upr_lm_fit = 2),
+          predict(sb_lm_model, new_data = wideDat, interval = "predict") %>% 
+            as_tibble() %>% dplyr::select(.sbpred_lm = 1),#.lwr = 2, .upr = 3),
+          predict( sb_lm_model, new_data = wideDat, type = "conf_int", level = 0.90 ) %>% 
+            dplyr::select( .lwr_lm_sb_fit = 1, .upr_lm_sb_fit = 2)
+          #,predict(workflow_linear_fit, new_data = wideDat, interval = "predict") %>% 
+          #   as_tibble() %>% dplyr::select(.fit_glm = 1),#.lwr = 2, .upr = 3),
+          # posterior_predict(model_bayes, newdata = wideDat, interval = "predict") %>% 
+          #   as_tibble() %>% 
+          #   dplyr::select(.bayes = 1),
+          # predict(sbmodel_bayes, new_data = wideDat, interval = "predict") %>%
+          #   as_tibble() %>%
+          #   dplyr::select(.bayes = 1)
+  ) %>% 
+  rowwise %>% 
+  mutate(.ensemblePred = sum(.pred_randFrs + .sb_pred_randFrs +
+                               .pred_lm + .sbpred_lm, na.rm = T),
+         .ensemblePred = .ensemblePred/4) -> predictions
+
+predictions %>% 
+  dplyr::select(GEOID,
+                hhSNAP,contains(".")) %>% 
+  view("predictions")
+
+predictions %>%
+  dplyr::select(GEOID,
+                hhSNAP,contains(".")) %>% 
+  fwrite("data/predictions2020.csv")
+  
+  
+  # openxlsx::write.xlsx(tmp, "./data/UnemploymentRate.xlsx", 
+  #                    rowNames = FALSE, overwrite = TRUE, startCol = c(1)
+  #                    , startRow = 1, asTable = c(TRUE), withFilter = c(TRUE)
+  #                    , tableStyle = "TableStyleMedium2")
+
+ # wideDat$lmFinal <- predict(object = lm_model$finalModel, newdata = wideDat)
+  predictions %>%
+    dplyr::select(NAME,.fit, hhSNAP) %>%
+    mutate( county = sub("(^.*\\d),(*.)","\\2", NAME),
+            county = trimws(county)) %>%
+    group_by(county) %>%
+    summarise(Total_SNAP_HH = sum(hhSNAP),
+              reg_SNAP_HH = sum(.fit)) %>%
+    ungroup %>%
+    mutate(reg_SNAP_HH = round(reg_SNAP_HH, 0),
+           diff_Total_mns_Reg = Total_SNAP_HH - reg_SNAP_HH,
+           pct_diff_ovr_Total = diff_Total_mns_Reg/Total_SNAP_HH) %>%
+    arrange(pct_diff_ovr_Total) %>%
+    filter(row_number() > max(row_number()) - 13 | row_number() <= 13) %>%
+    # slice(1:13) %>%
+    view("topAndBottom13Counties")
+
+  predictions_lm_bayes_tbl %>% yardstick::rmse(hhSNAP, .pred_lm)
+  predictions_lm_bayes_tbl %>% yardstick::rmse(hhSNAP, .fit_glm)
+  
+  ggplot(predictions, aes(x = hhSNAP, y = .fit)) + #define x and y axis variables
+    geom_point() + #add scatterplot points
+    stat_smooth(method = lm) + #confidence bands
+    geom_line(aes(y = .lwrfit), col = "coral2", linetype = "dashed", alpha = .5) + #lwr pred interval
+    geom_line(aes(y = .uprfit), col = "coral2", linetype = "dashed", alpha = .5) #upr pred interval
+  
+  
+  ggplot(predictions, aes(x = hhSNAP, y = .sbpred_lm)) + #define x and y axis variables
+    geom_point() + #add scatterplot points
+    stat_smooth(method = lm) + #confidence bands
+    geom_line(aes(y = .lwrfit), col = "coral2", linetype = "dashed", alpha = .5) + #lwr pred interval
+    geom_line(aes(y = .uprfit), col = "coral2", linetype = "dashed", alpha = .5) #upr pred interval
+    
+  ggplot(predictions, aes(x = .fit, y = .bayes)) + #define x and y axis variables
+    geom_point() + #add scatterplot points
+    stat_smooth(method = lm) + #confidence bands
+    geom_line(aes(y = .lwr), col = "coral2", linetype = "dashed") + #lwr pred interval
+    geom_line(aes(y = .upr), col = "coral2", linetype = "dashed") #upr pred interval
+      
+
+  predictions_lm_bayes_tbl <- wideDatOrig %>% 
+    dplyr::select(hhSNAP) %>% 
+    mutate( .fit_glm  = predict( workflow_linear_fit, new_data = wideDatOrig) %>% pull(.pred),
+            .pred_lm = predict(lm_model, new_data = wideDatOrig, interval = "predict") %>% pull(.pred)
+    ) 
+  
+  predictions_lm_bayes_tbl %>% yardstick::rmse(hhSNAP, .pred_lm)
+  predictions_lm_bayes_tbl %>% yardstick::rmse(hhSNAP, .fit_glm)
+  
+
+
+# Sys.setenv(JAVA_HOME='C:/Program Files/Java/') 
+
+if(FALSE) {
+  
+  library(caret)
+  library(caTools)
+  library(rpart)
+  library(rpart.plot)
+  # 
+  
+  library(rJava)
+  library(RWeka)
+
+j48 <- J48(fmla, data = train)
+
+print(j48)
+(party_j48 <- partykit::as.party(j48))
+
+old.par <- par(mfrow = c(2,1))
+prp(rpartTree)
+plot(partyTree)
+par(old.par)
+
+library(C50)
+library(printr)
+
+c5_0 <- C5.0(fmla,  data = train)
+
+summary(c5_0)
+
+plot(c5_0)
+
+library(ipred)
+
+# fit model
+fit_ipred <- ipred::bagging(fmla, data = train)
+# summarize the fit
+summary(fit_ipred)
+
+#plot(fit_ipred)
+
+}
+
+library(randomForest)
+
+startTime <- Sys.time()
+# fit model
+fit_Rndm_Frst <- randomForest(
+  fmla,
+  data = train,
+  na.action = na.omit,
+  ntree = 500,
+  importance = TRUE)
+
+Sys.time() - startTime # Time difference of 1.31578 mins
+
+# summarize the fit
+summary(fit_Rndm_Frst)
+
+getTree(fit_Rndm_Frst, 1, labelVar = TRUE)
+
+library(reprtree)
+
+reprtree:::plot.getTree(fit_Rndm_Frst)
+
+importance(fit_Rndm_Frst) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("name") %>% 
+  left_join(lbls) %>% 
+  view
+
+importance(fit_Rndm_Frst, type = 1)
+
+print(importance(fit_Rndm_Frst, type = 2))
+
+varImpPlot(fit_Rndm_Frst)
+
+if(FALSE){
+  
+library(gbm)
+
+# fit model
+fit_gbm <- gbm(fmla, data = train, 
+               shrinkage = 0.01, distribution = 'multinomial', cv.folds = 5, n.trees = 300, verbose = F)
+
+# summarize the fit
+print(fit_gbm)
+
+summary(fit_gbm,  cBars = 10, method = relative.influence, # also can use permutation.test.gbm
+  las = 2  )
+
+}
+# mPred = predict(fit_gbm, train, na.action = na.pass)
+# caret::postResample(mPred, train$hsBelAndAbvPvrty_Grps )
+# 
+# 
+# library(lime)
+# 
+# local_obs <- test[1:2, ]
+# 
+# explainer <- lime(train, fit_gbm)
+# explanation <- explain(test, explainer, n_features = 5)
+# plot_features(explanation)
+
+test$rpart <- predict(object = rpartTree, newdata = test, type = "class")
+test$party <- predict(object = partyTree, newdata = test, type = "response")
+test$j48 <- predict(object = party_j48, newdata = test, type = "response")
+test$c5_0 <- predict(object = c5_0, newdata = test, type = "class")
+test$fit_ipred <- predict(object = fit_ipred, newdata = test, type = "class")
+test$fit_Rndm_Frst <- predict(object = fit_Rndm_Frst, newdata = test, type = "class")
+
+# pred <- predict(fit_gbm, n.trees = fit_gbm$n.trees, newdata = test)
+# 
+# test$fit_gbm <- mPred
+
+#pretty(fit_gbm, i.tree = 1)
+
+
+test %>%
+  select(B22003_001_Grps, rpart:fit_Rndm_Frst) %>% 
+  view
+
+caret::confusionMatrix(data = test$rpart, reference = test$B22003_001_Grps )
+caret::confusionMatrix(data = test$party, reference = test$B22003_001_Grps )
+caret::confusionMatrix(data = test$j48, reference = test$B22003_001_Grps )
+caret::confusionMatrix(data = test$c5_0, reference = test$B22003_001_Grps )
+try(caret::confusionMatrix(data = test$fit_ipred, reference = test$B22003_001_Grps ))
+caret::confusionMatrix(data = test$fit_Rndm_Frst, reference = test$B22003_001_Grps )
+
+train$rpart <- predict(object = rpartTree, newdata = train, type = "class")
+train$party <- predict(object = partyTree, newdata = train, type = "response")
+train$j48 <- predict(object = party_j48, newdata = train, type = "response")
+train$c5_0 <- predict(object = c5_0, newdata = train, type = "class")
+train$fit_ipred <- predict(object = fit_ipred, newdata = train, type = "class")
+train$fit_Rndm_Frst <- predict(object = fit_Rndm_Frst, newdata = train, type = "class")
+
+train %>% 
+   select(B22003_001_Grps, rpart:fit_Rndm_Frst) %>% 
+  view
+
+
+caret::confusionMatrix(data = train$rpart, reference = train$B22003_001_Grps )
+caret::confusionMatrix(data = train$party, reference = train$B22003_001_Grps )
+caret::confusionMatrix(data = train$j48, reference = train$B22003_001_Grps )
+caret::confusionMatrix(data = train$c5_0, reference = train$B22003_001_Grps )
+try(caret::confusionMatrix(data = train$fit_ipred, reference = train$B22003_001_Grps ))
+caret::confusionMatrix(data = train$fit_Rndm_Frst, reference = train$B22003_001_Grps )
+
+c("(835,1290]","(835,1290]","(835,1290]","(835,1290]","(835,1290]","(835,190]","(835,190]","(835,129]") %>%
+  table() %>% .[.==max(.)] %>%  names() 
+
+
+library(kableExtra)
+library(purrr)
+library(caret)
+
+modellist <- list(Model1 = fit_Rndm_Frst, Model2 = partyTree, Model3 = party_j48, Model4 = c5_0, Model5 = fit_ipred)
+
+DecisionTreeResults  <- map(modellist, ~ predict(.x, newdata = train)) %>% 
+  map(~ confusionMatrix(train$B22003_001_Grps, .x)) %>% 
+  map_dfr(~ cbind(as.data.frame(t(.x$overall)),as.data.frame(t(.x$byClass))), .id = "ModelNumb")
+
+kable(DecisionTreeResults, "html") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+                font_size = 9)
+
+}
+
+if(FALSE) {
+  
+library(CHAID)
+library(purrr)
+  
+  cols <- names(wideDat)[4:112]
+  
+ wideDat[, (cols) := lapply(.SD, function(x) cut(x,
+                                                  dig.lab = 10,
+                                                  include.lowest = TRUE,
+                                                  ,breaks = BAMMtools::getJenksBreaks(x,
+                                                                            6, subset = NULL))), .SDcols = cols]
+ 
+ trainGroups <- train %>% select(GEOID) %>% 
+   inner_join(wideDat)
+ 
+ testGroups <- test %>% select(GEOID) %>% 
+   inner_join(wideDat)
+ 
+(fmla <- as.formula(paste("B22003_001_Grps ~ ", paste( names(trainGroups)[c(5:112)]
+                                                       , collapse = "+"))) )
+
+ 
+ chaidattrit1 <- chaid(fmla, data = trainGroups)
+ 
+ print(chaidattrit1)
+
+library(kableExtra)
+
+ modellist <- list(Model1 = chaidattrit1)
+ CHAIDResults <- map(modellist, ~ predict(.x)) %>%
+   map(~ confusionMatrix(trainGroups$B22003_001_Grps, .x)) %>%
+   map_dfr(~ cbind(as.data.frame(t(.x$overall)), as.data.frame(t(.x$byClass))), .id = "ModelNumb")
+kable(CHAIDResults, "html") %>% 
+   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+                 font_size = 10)
+
+}
+
+
+## TODO
+## do trend lines by county identify counties with lowest and highest participation rates
+
+
+```
+

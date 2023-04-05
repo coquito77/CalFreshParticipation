@@ -1,0 +1,13 @@
+name: CalFreshParticipationShinyApp
+title: CalFreshParticipationShinyApp
+username:
+account: coquito77
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 8764176
+bundleId: 7049080
+url: https://coquito77.shinyapps.io/CalFreshParticipationShinyApp/
+when: 1680630370.39523
+lastSyncTime: 1680630370.39524
+asMultiple: FALSE
+asStatic: FALSE
