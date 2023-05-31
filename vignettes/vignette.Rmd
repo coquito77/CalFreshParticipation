@@ -177,7 +177,7 @@ if(FALSE) {
   testindex <- sample(index, trunc(length(index)/3))
   testset <- wideDat[testindex,]
   trainset <- wideDat[-testindex,]
-  trainsetSB <- wideDat[grepl("Bernardino",wideDat$county), ]
+  trainsetSB <- trainset[grepl("Bernardino",trainset$county), ]
   
   lm_model <-
     linear_reg() %>%
@@ -202,7 +202,7 @@ if(FALSE) {
     set_mode("regression") %>%
     fit(fmlaNum, data = trainset)
   
-    model_spec_randForstSB <- parsnip::rand_forest(
+  model_spec_randForstSB <- parsnip::rand_forest(
     # mtry = integer(1),
     # trees = integer(1),
     # min_n = integer(1)
@@ -210,10 +210,10 @@ if(FALSE) {
     set_engine("randomForest") %>% 
     set_mode("regression") %>%
     fit(fmlaNum, data = trainsetSB)
-
+  
   recipe_spec_linear <- recipes::recipe(fmlaNum, trainset)
   
-    workflow_linear <- workflows::workflow() %>%
+  workflow_linear <- workflows::workflow() %>%
     workflows::add_model (model_spec_linear) %>%
     workflows::add_recipe( recipe_spec_linear)
   
@@ -242,7 +242,7 @@ if(FALSE) {
   #   ) %>% 
   #   mutate(.combination = (.fit + .fit_glm  ) / 2) %>% 
   #   select(GEOID,NAME, county, hhSNAP, hhSNAP_Grps, contains(".")) -> predictionsReg
-
+  
   core_brms_model %>% plot()
   
 if(!file.exists("models/model_bayesian.rds")) {
@@ -369,6 +369,10 @@ predictions %>%
                 hhSNAP,contains(".")) %>% 
   fwrite("data/predictions2020.csv")
   
+predictions %>%
+  dplyr::select(GEOID,
+                hhSNAP,contains(".")) %>% 
+  fwrite("CalFreshParticipationShinyApp/CalFreshParticipationShinyApp/predictions2020.csv")
   
   # openxlsx::write.xlsx(tmp, "./data/UnemploymentRate.xlsx", 
   #                    rowNames = FALSE, overwrite = TRUE, startCol = c(1)
@@ -636,7 +640,7 @@ kable(CHAIDResults, "html") %>%
 
 ## TODO
 ## do trend lines by county identify counties with lowest and highest participation rates
-
+}
 
 ```
 

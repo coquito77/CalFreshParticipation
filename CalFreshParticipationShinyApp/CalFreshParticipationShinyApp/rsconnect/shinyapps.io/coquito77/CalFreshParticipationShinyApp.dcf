@@ -5,9 +5,9 @@ account: coquito77
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 8764176
-bundleId: 7049080
+bundleId: 7287990
 url: https://coquito77.shinyapps.io/CalFreshParticipationShinyApp/
-when: 1680630370.39523
-lastSyncTime: 1680630370.39524
+when: 1685558093.9029
+lastSyncTime: 1685558093.90291
 asMultiple: FALSE
 asStatic: FALSE
